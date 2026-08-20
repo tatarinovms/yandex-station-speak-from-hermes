@@ -1,0 +1,7 @@
+# Не коммитить реальные секреты
+.env
+*.env
+!env.example
+
+# macOS
+.DS_Store
