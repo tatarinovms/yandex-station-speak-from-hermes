@@ -13,6 +13,48 @@ spec.loader.exec_module(tts)
 
 
 class AudioCycleTests(unittest.TestCase):
+    def test_parse_command_mode_preserves_flag_like_text(self):
+        self.assertEqual(
+            tts.parse_command_mode(["--command", "--volume", "5"]),
+            "--volume 5",
+        )
+
+    def test_parse_command_mode_rejects_flags_before_command(self):
+        with self.assertRaisesRegex(ValueError, "must be the first option"):
+            tts.parse_command_mode(["--pause", "--command", "Включи свет"])
+
+    def test_parse_command_file_preserves_shell_metacharacters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "command.txt"
+            text = "Включи свет'; touch /tmp/nope; #"
+            path.write_text(text, encoding="utf-8")
+
+            self.assertEqual(
+                tts.parse_command_mode(["--command-file", str(path)]),
+                text,
+            )
+
+    def test_parse_command_preserves_markdown_characters(self):
+        text = "запусти сценарий `Ночь` **сейчас**"
+        self.assertEqual(tts.parse_command_mode(["--command", text]), text)
+
+    def test_parse_command_file_reports_missing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            tts.parse_command_mode(["--command-file", "/missing/alice-command.txt"])
+
+    def test_send_alice_command_uses_send_text(self):
+        with patch.object(tts, "_ws_cmd", return_value='{"status":"ok"}') as send:
+            response = tts.send_alice_command(
+                "192.168.0.101", "token", "Включи свет"
+            )
+
+        self.assertEqual(response, '{"status":"ok"}')
+        send.assert_called_once_with(
+            "192.168.0.101",
+            "token",
+            {"command": "sendText", "text": "Включи свет"},
+        )
+
     def test_save_env_rejects_symlink(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "target"

@@ -23,6 +23,7 @@ echo "==> Установка в $SKILL_DIR"
 mkdir -p "$SKILL_DIR/scripts"
 install -m 0644 "$THIS_DIR/SKILL.md" "$SKILL_DIR/SKILL.md"
 install -m 0755 "$THIS_DIR/speak.sh" "$SKILL_DIR/speak.sh"
+install -m 0755 "$THIS_DIR/command.sh" "$SKILL_DIR/command.sh"
 install -m 0755 "$THIS_DIR/scripts/tts_dialog.py" "$SKILL_DIR/scripts/tts_dialog.py"
 install -m 0755 "$THIS_DIR/get_music_token.py" "$SKILL_DIR/get_music_token.py"
 install -m 0644 "$THIS_DIR/env.example" "$SKILL_DIR/env.example"
@@ -68,4 +69,6 @@ cat <<EOF
 3. Заполнить STATION_IP в $SKILL_DIR/.env
 4. Проверить озвучку:
    $SKILL_DIR/speak.sh 'Проверка озвучки'
+5. Проверить команду Алисе:
+   $SKILL_DIR/command.sh 'Включи свет'
 EOF

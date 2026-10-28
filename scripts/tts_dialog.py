@@ -142,6 +142,34 @@ def clean_text(text: str) -> str:
     return text[:500]
 
 
+def parse_command_mode(argv: list[str]) -> str | None:
+    """Строго разбирает --command/--command-file, сохраняя текст без фильтрации."""
+    markers = {"--command", "--command-file"}
+    present = [arg for arg in argv if arg in markers]
+    if not present:
+        return None
+    if argv[0] not in markers:
+        raise ValueError("--command or --command-file must be the first option")
+    if argv[0] == "--command-file":
+        if len(argv) != 2:
+            raise ValueError("--command-file requires exactly one file path")
+        path = argv[1]
+        if os.path.islink(path):
+            raise ValueError("refusing to read command through a symbolic link")
+        with open(path, encoding="utf-8") as stream:
+            text = stream.read()
+    else:
+        if len(argv) < 2:
+            raise ValueError("--command requires command text")
+        text = " ".join(argv[1:])
+    text = text.strip()
+    if not text:
+        raise ValueError("command text is empty")
+    if len(text) > 500:
+        raise ValueError("command text is longer than 500 characters")
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Минимальный WebSocket-клиент (RFC 6455)
 # ---------------------------------------------------------------------------
@@ -630,6 +658,15 @@ def cmd_resume_music(station_ip: str, conversation_token: str) -> None:
     _ws_cmd(station_ip, conversation_token, {"command": "sendText", "text": "продолжить"})
 
 
+def send_alice_command(station_ip: str, conversation_token: str, text: str) -> str:
+    """Передаёт Алисе текст как команду, будто пользователь произнёс её вслух."""
+    return _ws_cmd(
+        station_ip,
+        conversation_token,
+        {"command": "sendText", "text": text},
+    )
+
+
 def is_playing(station_ip: str, conversation_token: str) -> bool:
     """Проверяет, играет ли сейчас на колонке что-то (hasPause == True).
 
@@ -842,9 +879,16 @@ def main() -> None:
                       file=sys.stderr)
 
     # --- Входной текст ---
+    command_text: str | None = None
+    try:
+        command_text = parse_command_mode(sys.argv[1:])
+    except (ValueError, OSError, UnicodeError) as exc:
+        die(str(exc))
+
     # Отфильтровываем CLI-флаги и значения флагов с аргументом (--volume <число>),
     # чтобы значение 0.8 не попадало в озвучиваемый текст.
     dialog = "--dialog" in sys.argv
+    command_mode = command_text is not None
     args: list[str] = []
     skip_next = False
     for a in sys.argv[1:]:
@@ -857,13 +901,14 @@ def main() -> None:
         if a.startswith("--"):
             continue
         args.append(a)
-    text = " ".join(args)
+    text = command_text if command_mode else " ".join(args)
     if not text:
         die(f"Usage: {sys.argv[0]} <text to speak>")
 
-    text = clean_text(text)
-    if not text:
-        die("Text is empty after cleanup")
+    if not command_mode:
+        text = clean_text(text)
+        if not text:
+            die("Text is empty after cleanup")
 
     # Управление токеном
     now = int(time.time())
@@ -882,6 +927,16 @@ def main() -> None:
         env["CONVERSATION_TOKEN"] = conversation_token
         env["CONVERSATION_TOKEN_EXPIRES"] = str(expires)
         save_env(conf_path, env)
+
+    if command_mode:
+        try:
+            send_alice_command(station_ip, conversation_token, text)
+        except socket.timeout:
+            die(f"Timeout connecting to station at {station_ip}:1961")
+        except OSError as e:
+            die(f"Connection to station failed: {e}")
+        print("OK: команда отправлена Алисе")
+        return
 
     # Формируем и отправляем payload
     payload = build_payload(text, conversation_token, dialog=dialog)

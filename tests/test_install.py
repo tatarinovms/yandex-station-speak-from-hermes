@@ -35,6 +35,7 @@ class InstallerTests(unittest.TestCase):
             dest = hermes_home / "skills/smart-home/yandex-station-speak"
             self.assertTrue((dest / "scripts/tts_dialog.py").is_file())
             self.assertTrue((dest / "get_music_token.py").is_file())
+            self.assertTrue((dest / "command.sh").is_file())
             self.assertEqual(stat.S_IMODE((dest / ".env").stat().st_mode), 0o600)
             self.assertFalse((dest / ".git").exists())
 
@@ -51,6 +52,35 @@ class InstallerTests(unittest.TestCase):
             )
             self.assertEqual(speak.returncode, 0, speak.stdout + speak.stderr)
             self.assertIn("OK: фраза отправлена", speak.stdout)
+
+            (dest / "scripts/tts_dialog.py").write_text(
+                "import sys\nraise SystemExit(0 if sys.argv[1:] == ['--command', 'Выключи свет'] else 3)\n",
+                encoding="utf-8",
+            )
+            command = subprocess.run(
+                [str(dest / "command.sh"), "Выключи свет"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(command.returncode, 0, command.stdout + command.stderr)
+            self.assertIn("OK: команда отправлена", command.stdout)
+
+            command_file = Path(tmp) / "alice-command.txt"
+            command_file.write_text("Включи свет'; touch /tmp/nope; #", encoding="utf-8")
+            (dest / "scripts/tts_dialog.py").write_text(
+                "import sys\nraise SystemExit(0 if sys.argv[1:] == ['--command-file', sys.argv[2]] else 3)\n",
+                encoding="utf-8",
+            )
+            command = subprocess.run(
+                [str(dest / "command.sh"), "--file", str(command_file)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(command.returncode, 0, command.stdout + command.stderr)
 
     def test_preserves_existing_env(self):
         with tempfile.TemporaryDirectory() as tmp:
