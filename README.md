@@ -60,8 +60,6 @@ ${HERMES_HOME:-$HOME/.hermes}/skills/smart-home/yandex-station-speak
 
 `MUSIC_TOKEN` не выводится в терминал: он сразу записывается в `.env`, которому выставляются права `0600`.
 
-Не отправляйте токен в чат и не добавляйте `.env` в Git.
-
 ## 2. Поиск устройства
 
 ```bash
