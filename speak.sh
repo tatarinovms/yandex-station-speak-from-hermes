@@ -14,7 +14,7 @@
 #   6. пауза 1с, затем возобновить музыку (sendText 'продолжить')
 set -uo pipefail
 
-SKILL_DIR="$HOME/.hermes/skills/smart-home/yandex-station-speak"
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="$SKILL_DIR/scripts/tts_dialog.py"
 
 # Требуется Python 3.10+. На macOS системный python3 может быть 3.9,

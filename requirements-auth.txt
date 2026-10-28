@@ -1,0 +1,1 @@
+ya-passport-auth==2.2.0

@@ -1,104 +1,158 @@
-# yandex-station-speak
+# yandex-station-speak-from-hermes
 
-Озвучка текста на колонку **Яндекс Станция** голосом Алисы через протокол **Glagol** (WSS :1961).
+Hermes skill для озвучки текста на **Яндекс Станции** голосом Алисы через локальный протокол **Glagol** (WSS, порт 1961).
 
-Полный звуковой цикл: **пауза музыки → громкость 80% → фраза → возврат громкости → продолжение музыки**.
+Полный звуковой цикл: **пауза музыки → временная громкость 80% → фраза → возврат громкости → продолжение музыки**.
 
-Эволюция скилла `rasperepodvipodvert/claude-skill-yandex-tts` (MIT, автор Igor Filatov). Сохранено ~80% протокольной основы, добавлено ~20% — законченный аудио-цикл с прерыванием музыки и управлением громкостью.
+Форк [`Realmagnum/yandex-station-speak`](https://github.com/Realmagnum/yandex-station-speak), основанного на `rasperepodvipodvert/claude-skill-yandex-tts`. Добавлены установка для Hermes, безопасное получение токена через OAuth Device Flow, тесты и гарантированное восстановление состояния колонки после ошибки.
 
 ## Возможности
 
-- Отправить фразу на колонку голосом Алисы.
-- **Прерывает музыку** (пауза перед озвучкой) и **возобновляет её после**.
-- **Поднимает громкость до 80%** на время озвучки, затем возвращает прежнюю.
-- Если колонка молчала до озвучки — музыка **не** включается (умный детект `hasPause`).
-- Текст ≤500 символов, русский, без кода/JSON/спецсимволов.
+- Озвучивает фразы длиной до 500 символов.
+- Приостанавливает музыку и возвращает её после сообщения.
+- Временно повышает громкость до 80%, затем восстанавливает исходную.
+- Не запускает музыку, если до сообщения колонка молчала.
+- При ошибке отправки всё равно пытается вернуть прежнюю громкость и музыку.
+- Работает локально, без облачного TTS-файла: фразу произносит Алиса.
+- В Hermes реагирует на запросы вида `скажи в станции: <текст>`.
+
+> Glagol — недокументированный протокол Яндекса. Его поведение может измениться после обновления прошивки.
+
+## Требования
+
+- Linux или macOS;
+- Hermes Agent;
+- Python 3.10+ для озвучки;
+- Python 3.12+ для автоматического получения `MUSIC_TOKEN`;
+- рабочий хост и Станция в одной локальной сети;
+- статический DHCP lease для Станции рекомендуется.
 
 ## Установка
 
 ```bash
-# скрипты
-mkdir -p ~/.hermes/skills/smart-home/yandex-station-speak && cd $_
-# положите сюда SKILL.md, speak.sh, scripts/tts_dialog.py, env.example
-
-# зависимости: Python 3.10+
-python3 --version   # должно быть 3.10+
-
-# конфиг
-cp env.example .env
-# заполните .env: MUSIC_TOKEN, DEVICE_ID, DEVICE_PLATFORM, STATION_IP
+git clone https://github.com/tatarinovms/yandex-station-speak-from-hermes.git
+cd yandex-station-speak-from-hermes
+./install.sh
 ```
 
-### Получение MUSIC_TOKEN (важно!)
+Skill устанавливается в:
 
-**Рабочий** токен даётся ТОЛЬКО через `oauth.mobile.yandex.net/1/token`
-(см. раздел «Токены» ниже). Эндпоинт `oauth.yandex.ru/token` из оригинального
-README даёт 403 `USER_IS_NOT_AUTHORIZED_FOR_API`.
+```text
+${HERMES_HOME:-$HOME/.hermes}/skills/smart-home/yandex-station-speak
+```
 
-## Использование
+Повторный запуск установщика обновляет файлы skill, но сохраняет существующий `.env`.
 
-### Прямое подключение (колонка в той же LAN, что и рабочий хост)
+## 1. Получение MUSIC_TOKEN
+
+Установщик создаёт отдельное окружение `.token-venv` и устанавливает `ya-passport-auth`. Запустите:
 
 ```bash
-~/.hermes/skills/smart-home/yandex-station-speak/speak.sh 'Текст'
+"${HERMES_HOME:-$HOME/.hermes}/skills/smart-home/yandex-station-speak/.token-venv/bin/python" \
+  "${HERMES_HOME:-$HOME/.hermes}/skills/smart-home/yandex-station-speak/get_music_token.py"
 ```
 
-### Через ssh на сервер, где колонка доступна
+Скрипт покажет адрес Яндекса и короткий код:
+
+1. откройте адрес в браузере;
+2. войдите в аккаунт, к которому привязана Станция;
+3. введите код и подтвердите вход.
+
+`MUSIC_TOKEN` не выводится в терминал: он сразу записывается в `.env`, которому выставляются права `0600`.
+
+Не отправляйте токен в чат и не добавляйте `.env` в Git.
+
+## 2. Поиск устройства
 
 ```bash
-ssh host "~/.hermes/skills/smart-home/yandex-station-speak/speak.sh 'Текст'"
+cd "${HERMES_HOME:-$HOME/.hermes}/skills/smart-home/yandex-station-speak"
+python3 scripts/tts_dialog.py --list-devices
 ```
 
-### Ручной вызов (полный контроль)
+Пример:
+
+```text
+Яндекс Мини  platform=yandexmini  id=0123456789ABCDEF
+```
+
+Перенесите `id` и `platform` в `.env`:
+
+```ini
+DEVICE_ID=0123456789ABCDEF
+DEVICE_PLATFORM=yandexmini
+```
+
+## 3. IP-адрес Станции
+
+Найдите адрес колонки в DHCP leases роутера и задайте его в `.env`:
+
+```ini
+STATION_IP=192.168.0.50
+```
+
+На macOS скрипт также умеет искать `_yandexio._tcp` через `dns-sd`, но статический DHCP lease надёжнее.
+
+## 4. Проверка
+
+```bash
+"${HERMES_HOME:-$HOME/.hermes}/skills/smart-home/yandex-station-speak/speak.sh" \
+  'Проверка. Озвучка Яндекс Станции подключена.'
+```
+
+Без паузы и изменения громкости:
+
+```bash
+"${HERMES_HOME:-$HOME/.hermes}/skills/smart-home/yandex-station-speak/speak.sh" --nopause \
+  'Сообщение поверх музыки.'
+```
+
+Ручной вызов:
 
 ```bash
 python3 scripts/tts_dialog.py --pause --volume 0.8 'Текст'
 ```
 
-Флаги:
-- `--pause` — пауза музыки перед озвучкой + возобновление после (пауза 1с).
-- `--volume 0.8` — громкость 80% на время озвучки, возврат после.
-- Без флагов — озвучить поверх (музыка приглушится, не прервётся).
+## Использование в Hermes
 
-> ⚠️ На macOS системный `python3` может быть 3.9 (не подходит). `speak.sh` сам
-> выбирает 3.10+ (python3.13/3.12/3.11/3.10 или Homebrew). Вручную — используйте
-> `/opt/homebrew/bin/python3.13`.
+После установки достаточно написать:
 
-### Проверка устройств
+```text
+скажи в станции: Через десять минут пора выходить
+```
+
+Skill передаёт только текст после команды. Он не добавляет пояснений и не отправляет секреты, код или служебные данные.
+
+## Как это работает
+
+- Список устройств и `conversationToken` запрашиваются через Quasar API.
+- `MUSIC_TOKEN` получается обменом авторизации через `oauth.mobile.yandex.net/1/token`; helper скрывает детали обмена за OAuth Device Flow.
+- Команды отправляются напрямую на `wss://<STATION_IP>:1961`.
+- Пауза и продолжение — команды `sendText` со словами «пауза» и «продолжить».
+- Озвучка — `serverAction` со сценарием `personal_assistant.scenarios.quasar.iot.repeat_phrase`.
+- `conversationToken` действует примерно 30 минут и обновляется после 25 минут.
+- Конец фразы определяется по возврату `aliceState` в стабильный `IDLE`.
+
+## Тесты
 
 ```bash
-python3 scripts/tts_dialog.py --list-devices
+python3 -m unittest discover -s tests -v
+bash -n install.sh speak.sh
+python3 -m py_compile scripts/tts_dialog.py get_music_token.py
 ```
 
-## Токены (Glagol / Quasar)
+## Файлы
 
-- **Управление колонкой** — Glagol WSS на `:1961`, сообщения с `conversationToken` (короткоживущий, ~30с, кешируется 25с).
-- **Список устройств / token** — Quasar (`quasar.yandex.net/glagol/device_list`, `.../token`).
-- **MUSIC_TOKEN** — получать через `oauth.mobile.yandex.net/1/token` (mobile-эндпоинт даёт нужный scope). `oauth.yandex.ru/token` → 403.
-
-## Структура
-
+```text
+SKILL.md                 инструкции для Hermes
+speak.sh                 короткая обёртка полного аудиоцикла
+scripts/tts_dialog.py    Glagol/Quasar-клиент
+get_music_token.py       безопасный OAuth Device Flow
+requirements-auth.txt    зависимость только для получения токена
+install.sh               установка в активный Hermes profile
+env.example              шаблон конфигурации без секретов
+tests/                   автоматические тесты
 ```
-SKILL.md           # (опционально) скилл-метаданные для Hermes/Claude
-speak.sh           # обёртка: полный цикл паузы/громкости, авто-выбор Python 3.10+
-scripts/
-  tts_dialog.py    # основной скрипт (Glagol WSS + все команды)
-env.example        # шаблон конфига (БЕЗ секретов)
-install.sh         # установщик на новый хост
-```
-
-## Ключевые детали реализации (грабли)
-
-1. Пауза музыки = `sendText "пауза"` (НЕ `{"command":"stop"}` — колонка отвечает close frame).
-2. `aliceState` во время озвучки = `NONE`, не `SPEAKING`.
-3. Перед возобновлением музыки ждать конца фразы (`wait_until_idle`: 1.3с лаг + 2 стабильных `IDLE`), иначе фраза обрывается и громкость падает.
-4. **Возобновлять музыку только если она играла** (`playerState.hasPause`), иначе «продолжить» стартует радио из простоя.
-5. Возврат громкости — `get_volume()` затем `cmd_set_volume(prev)`.
-6. Не придумывать про «0.8» — в `--volume <число>` значение не должно попадать в текст (обрабатывается `skip_next`).
 
 ## Лицензия
 
-MIT. Основа: `rasperepodvipodvert/claude-skill-yandex-tts` (c) Igor Filatov.
-Модификации и полный аудио-цикл — этот репозиторий.
-
-**Протокол Glagol недокументирован и может измениться прошивкой Яндекса в любой момент.**
+MIT. Исходная протокольная основа: Igor Filatov (`rasperepodvipodvert/claude-skill-yandex-tts`). Полный аудиоцикл: `Realmagnum/yandex-station-speak`. Hermes-интеграция и последующие исправления — этот fork.

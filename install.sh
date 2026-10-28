@@ -1,59 +1,71 @@
 #!/usr/bin/env bash
-# install.sh — развернуть озвучку Яндекс Станции Мини на новом хосте.
-#
-# Делает:
-#   1. клонирует репо claude-skill-yandex-tts в ~/.claude/skills/speak
-#   2. копирует обновлённый tts_dialog.py (полный цикл паузы/громкости) и speak.sh
-#   3. создаёт .env из env.example
-#
-# Для завершения: заполнить MUSIC_TOKEN и DEVICE_ID в .env (см. SETUP.md /
-# раздел «Получение MUSIC_TOKEN»), затем проверить:
-#   python3 scripts/tts_dialog.py --list-devices
-#
-# ВАЖНО: работает на Linux-сервере. На macOS mDNS есть, но STATION_IP всё же
-# настоятельно рекомендуется прописать статическим.
+# Устанавливает skill в активный Hermes profile и готовит безопасное получение токена.
 set -euo pipefail
 
-SKILL_DIR="${HOME}/.claude/skills/speak"
-REPO="https://github.com/rasperepodvipodvert/claude-skill-yandex-tts.git"
 THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+SKILL_DIR="$HERMES_HOME/skills/smart-home/yandex-station-speak"
 
-echo "==> Скилл будет установлен в: $SKILL_DIR"
-
-# Python 3.10+?
-py=$(command -v python3 || true)
-if [ -n "$py" ]; then
-  maj_min=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "0.0")
-  echo "==> python3: $py ($maj_min), нужно 3.10+"
+PY=""
+for candidate in python3.13 python3.12 python3.11 python3.10 python3; do
+  if command -v "$candidate" >/dev/null 2>&1 && \
+     "$candidate" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' 2>/dev/null; then
+    PY="$candidate"
+    break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "ERROR: требуется Python 3.10+" >&2
+  exit 2
 fi
 
-mkdir -p "$(dirname "$SKILL_DIR")"
-if [ ! -d "$SKILL_DIR/.git" ]; then
-  echo "==> Клонирую репо..."
-  git clone --depth 1 "$REPO" "$SKILL_DIR"
-else
-  echo "==> Репо уже есть, оставляю (для обновления: git -C $SKILL_DIR pull)"
-fi
+echo "==> Установка в $SKILL_DIR"
+mkdir -p "$SKILL_DIR/scripts"
+install -m 0644 "$THIS_DIR/SKILL.md" "$SKILL_DIR/SKILL.md"
+install -m 0755 "$THIS_DIR/speak.sh" "$SKILL_DIR/speak.sh"
+install -m 0755 "$THIS_DIR/scripts/tts_dialog.py" "$SKILL_DIR/scripts/tts_dialog.py"
+install -m 0755 "$THIS_DIR/get_music_token.py" "$SKILL_DIR/get_music_token.py"
+install -m 0644 "$THIS_DIR/env.example" "$SKILL_DIR/env.example"
+install -m 0644 "$THIS_DIR/requirements-auth.txt" "$SKILL_DIR/requirements-auth.txt"
 
-echo "==> Копирую обновлённые скрипты (tts_dialog.py, speak.sh)..."
-cp "$THIS_DIR/tts_dialog.py" "$SKILL_DIR/scripts/tts_dialog.py"
-chmod +x "$SKILL_DIR/scripts/tts_dialog.py"
-cp "$THIS_DIR/speak.sh" "$SKILL_DIR/speak.sh"
-chmod +x "$SKILL_DIR/speak.sh"
-
-echo "==> Создаю .env из env.example (если нет)..."
 if [ ! -f "$SKILL_DIR/.env" ]; then
-  cp "$THIS_DIR/env.example" "$SKILL_DIR/.env"
+  install -m 0600 "$THIS_DIR/env.example" "$SKILL_DIR/.env"
+else
+  chmod 0600 "$SKILL_DIR/.env"
+  echo "==> Существующий .env сохранён"
+fi
+
+AUTH_READY=0
+if [ "${YSS_SKIP_AUTH_DEPS:-0}" = "1" ]; then
+  echo "==> получение MUSIC_TOKEN пропущено (YSS_SKIP_AUTH_DEPS=1)"
+else
+  if "$PY" -c 'import sys; raise SystemExit(sys.version_info < (3, 12))'; then
+    echo "==> Установка helper для OAuth Device Flow"
+    "$PY" -m venv "$SKILL_DIR/.token-venv"
+    "$SKILL_DIR/.token-venv/bin/pip" install --disable-pip-version-check --quiet \
+      -r "$SKILL_DIR/requirements-auth.txt"
+    AUTH_READY=1
+  else
+    echo "WARNING: получение MUSIC_TOKEN требует Python 3.12+; основной TTS работает на 3.10+" >&2
+  fi
 fi
 
 echo ""
-echo "✅ Установка готова. Осталось заполнить $SKILL_DIR/.env:"
-echo "   - MUSIC_TOKEN   (рабочий, через oauth.mobile.yandex.net — см. SETUP.md)"
-echo "   - DEVICE_ID     (подставьте свой, из --list-devices)"
-echo "   - DEVICE_PLATFORM (например yandexmini_2)"
-echo "   - STATION_IP    (статический IP колонки, на Linux обязателен)"
+echo "Установка завершена."
 echo ""
-echo "Проверка:"
-echo "   cd $SKILL_DIR && python3 scripts/tts_dialog.py --list-devices"
-echo "Тест озвучки:"
-echo "   python3 $SKILL_DIR/scripts/tts_dialog.py --pause --volume 0.8 'Привет'"
+if [ "$AUTH_READY" = "1" ]; then
+  cat <<EOF
+1. Получить MUSIC_TOKEN:
+   $SKILL_DIR/.token-venv/bin/python $SKILL_DIR/get_music_token.py
+EOF
+else
+  echo "1. Получение MUSIC_TOKEN не настроено. Нужен Python 3.12+ и повторный запуск ./install.sh."
+fi
+cat <<EOF
+
+2. Найти DEVICE_ID и DEVICE_PLATFORM:
+   $PY $SKILL_DIR/scripts/tts_dialog.py --list-devices
+3. Заполнить STATION_IP в $SKILL_DIR/.env
+4. Проверить озвучку:
+   $SKILL_DIR/speak.sh 'Проверка озвучки'
+EOF

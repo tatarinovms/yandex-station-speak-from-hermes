@@ -1,7 +1,20 @@
-# Не коммитить реальные секреты
+# Секреты и локальная конфигурация
 .env
 *.env
 !env.example
 
-# macOS
+# Виртуальные окружения
+.token-venv/
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Редакторы и ОС
 .DS_Store
+.idea/
+.vscode/

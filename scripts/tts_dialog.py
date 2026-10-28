@@ -16,6 +16,7 @@ import ssl
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 import urllib.parse
@@ -55,7 +56,9 @@ def load_env(path: str) -> dict[str, str]:
 
 
 def save_env(path: str, env: dict[str, str]) -> None:
-    """Перезаписывает .env файл, сохраняя порядок ключей и комментарии."""
+    """Атомарно обновляет .env, сохраняя порядок, комментарии и mode 0600."""
+    if os.path.islink(path):
+        raise ValueError(f"Refusing to write .env through a symbolic link: {path}")
     lines: list[str] = []
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as f:
@@ -78,9 +81,31 @@ def save_env(path: str, env: dict[str, str]) -> None:
         if key not in updated_keys:
             new_lines.append(f"{key}={value}\n")
 
-    with open(path, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
-    os.chmod(path, 0o600)
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix="..env.", dir=directory)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+        dir_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def clean_text(text: str) -> str:
@@ -590,12 +615,9 @@ def _ws_cmd(station_ip: str, conversation_token: str, payload: dict) -> str:
 
 def get_volume(station_ip: str, conversation_token: str) -> float:
     """Читает текущую громкость колонки (0.0–1.0) через getState."""
-    try:
-        raw = _ws_cmd(station_ip, conversation_token, {"command": "getState"})
-        data = json.loads(raw)
-        return float(data["state"]["volume"])
-    except Exception:
-        return 0.5  # значение по умолчанию, если не смогли прочитать
+    raw = _ws_cmd(station_ip, conversation_token, {"command": "getState"})
+    data = json.loads(raw)
+    return float(data["state"]["volume"])
 
 
 def cmd_pause_music(station_ip: str, conversation_token: str) -> None:
@@ -612,14 +634,12 @@ def is_playing(station_ip: str, conversation_token: str) -> bool:
     """Проверяет, играет ли сейчас на колонке что-то (hasPause == True).
 
     Возвращает True, если есть активный плеер (музыка/радио/подкаст),
-    False — если колонка в простое. По умолчанию False при ошибке чтения.
+    False — если колонка в простое. Ошибка чтения передаётся вызывающему коду,
+    чтобы он не менял состояние, которое затем не сможет восстановить.
     """
-    try:
-        raw = _ws_cmd(station_ip, conversation_token, {"command": "getState"})
-        data = json.loads(raw)
-        return bool(data.get("state", {}).get("playerState", {}).get("hasPause"))
-    except Exception:
-        return False
+    raw = _ws_cmd(station_ip, conversation_token, {"command": "getState"})
+    data = json.loads(raw)
+    return bool(data.get("state", {}).get("playerState", {}).get("hasPause"))
 
 
 def cmd_set_volume(station_ip: str, conversation_token: str, volume: float) -> None:
@@ -630,12 +650,9 @@ def cmd_set_volume(station_ip: str, conversation_token: str, volume: float) -> N
 
 def get_alice_state(station_ip: str, conversation_token: str) -> str:
     """Читает состояние Алисы (IDLE/SPEAKING/...)."""
-    try:
-        raw = _ws_cmd(station_ip, conversation_token, {"command": "getState"})
-        data = json.loads(raw)
-        return str(data.get("state", {}).get("aliceState", "")).upper()
-    except Exception:
-        return ""
+    raw = _ws_cmd(station_ip, conversation_token, {"command": "getState"})
+    data = json.loads(raw)
+    return str(data.get("state", {}).get("aliceState", "")).upper()
 
 
 def wait_until_idle(station_ip: str, conversation_token: str,
@@ -662,6 +679,43 @@ def wait_until_idle(station_ip: str, conversation_token: str,
             idle_ticks = 0
         time.sleep(poll)
     return False
+
+
+def run_audio_cycle(station_ip: str, conversation_token: str, payload: str,
+                    *, pause: bool = False, volume: float | None = None) -> None:
+    """Озвучивает payload и гарантированно восстанавливает звук колонки."""
+    prev_volume = get_volume(station_ip, conversation_token) if volume is not None else None
+    was_playing = is_playing(station_ip, conversation_token) if pause else False
+
+    try:
+        if pause:
+            cmd_pause_music(station_ip, conversation_token)
+        if volume is not None:
+            cmd_set_volume(station_ip, conversation_token, volume)
+
+        ws_send_and_receive(station_ip, 1961, payload)
+        waited = wait_until_idle(station_ip, conversation_token, timeout=60)
+        if not waited:
+            print("WARNING: Алиса не вернулась в IDLE за 60с, продолжаем без ожидания",
+                  file=sys.stderr)
+    finally:
+        # Даже если отправка фразы упала, возвращаем прежнее состояние колонки.
+        if volume is not None and prev_volume is not None:
+            try:
+                cmd_set_volume(station_ip, conversation_token, prev_volume)
+            except Exception as exc:
+                print(f"WARNING: не удалось вернуть громкость: {exc}", file=sys.stderr)
+
+        if pause and was_playing:
+            if volume is not None:
+                time.sleep(1.0)
+            try:
+                cmd_resume_music(station_ip, conversation_token)
+            except Exception as exc:
+                print(f"WARNING: не удалось продолжить музыку: {exc}", file=sys.stderr)
+        elif pause:
+            print("INFO: музыка не играла до озвучки — возобновление пропущено",
+                  file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -846,71 +900,15 @@ def main() -> None:
             volume = float(sys.argv[sys.argv.index("--volume") + 1])
         except (ValueError, IndexError):
             die("Некорректное значение --volume (нужно число 0.0–1.0)")
-    prev_volume = None
-    was_playing = False
-
-    if (pause or volume is not None):
-        # читаем текущую громкость ДО паузы, чтобы вернуть её в конце
-        try:
-            prev_volume = get_volume(station_ip, conversation_token)
-        except Exception as _e:
-            print(f"WARNING: не удалось прочитать громкость: {_e}", file=sys.stderr)
-
-    if pause:
-        # запоминаем, играла ли музыка ДО паузы, чтобы в конце возобновлять
-        # только если она реально играла (иначе «продолжить» стартует музыку
-        # из простоя — баг: колонка включала радио, хотя до озвучки молчала).
-        try:
-            was_playing = is_playing(station_ip, conversation_token)
-        except Exception as _e:
-            print(f"WARNING: не удалось определить состояние музыки: {_e}", file=sys.stderr)
-            was_playing = True  # консервативно: если не смогли — считаем что играла
-        try:
-            cmd_pause_music(station_ip, conversation_token)
-        except Exception as _e:
-            print(f"WARNING: не удалось поставить музыку на паузу: {_e}", file=sys.stderr)
-
-    if volume is not None:
-        try:
-            cmd_set_volume(station_ip, conversation_token, volume)
-        except Exception as _e:
-            print(f"WARNING: не удалось поднять громкость: {_e}", file=sys.stderr)
-
     try:
-        _response = ws_send_and_receive(station_ip, 1961, payload)
+        run_audio_cycle(
+            station_ip, conversation_token, payload,
+            pause=pause, volume=volume,
+        )
     except socket.timeout:
         die(f"Timeout connecting to station at {station_ip}:1961")
     except OSError as e:
         die(f"Connection to station failed: {e}")
-
-    # Ждём, пока Алиса реально закончит говорить, прежде чем возвращать
-    # музыку и громкость. Иначе "продолжить" и setVolume сработают мгновенно,
-    # прервав длинную фразу (гонка таймингов).
-    waited = wait_until_idle(station_ip, conversation_token, timeout=60)
-    if not waited:
-        print("WARNING: Алиса не вернулась в IDLE за 60с, продолжаем без ожидания",
-              file=sys.stderr)
-
-    # Сначала возвращаем прежнюю громкость, даём паузу 1с, и только потом
-    # возобновляем музыку — чтобы не было резкого скачка громкости при старте.
-    if volume is not None and prev_volume is not None:
-        try:
-            cmd_set_volume(station_ip, conversation_token, prev_volume)
-        except Exception as _e:
-            print(f"WARNING: не удалось вернуть громкость: {_e}", file=sys.stderr)
-
-    if pause and was_playing:
-        # пауза между возвратом громкости и возобновлением музыки
-        time.sleep(1.0)
-        try:
-            cmd_resume_music(station_ip, conversation_token)
-        except Exception as _e:
-            print(f"WARNING: не удалось продолжить музыку: {_e}", file=sys.stderr)
-    elif pause:
-        # музыка ДО паузы не играла (колонка была в простое) — НЕ возобновляем,
-        # иначе «продолжить» стартует радио/музыку из ничего.
-        print("INFO: музыка не играла до озвучки — возобновление пропущено",
-              file=sys.stderr)
 
     print("OK")
 
