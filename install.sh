@@ -20,8 +20,9 @@ if [ -z "$PY" ]; then
 fi
 
 echo "==> Установка в $SKILL_DIR"
-mkdir -p "$SKILL_DIR/scripts"
+mkdir -p "$SKILL_DIR/scripts" "$SKILL_DIR/references"
 install -m 0644 "$THIS_DIR/SKILL.md" "$SKILL_DIR/SKILL.md"
+install -m 0644 "$THIS_DIR/references/maintenance.md" "$SKILL_DIR/references/maintenance.md"
 install -m 0755 "$THIS_DIR/speak.sh" "$SKILL_DIR/speak.sh"
 install -m 0755 "$THIS_DIR/command.sh" "$SKILL_DIR/command.sh"
 install -m 0755 "$THIS_DIR/scripts/tts_dialog.py" "$SKILL_DIR/scripts/tts_dialog.py"

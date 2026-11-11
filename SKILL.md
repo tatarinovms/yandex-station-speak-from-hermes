@@ -1,6 +1,6 @@
 ---
 name: yandex-station-speak
-description: "Use when user asks to say text on Yandex Station."
+description: "Use when user asks Yandex Station to speak or act."
 version: 1.0.0
 author: Maxim Tatarinov
 license: MIT
@@ -10,15 +10,26 @@ metadata:
     tags: [smart-home, yandex-station, tts, glagol]
 ---
 
-# Озвучка на Яндекс Станцию
+# Яндекс Станция: озвучка и команды
 
-## Триггер
+Это **один skill с двумя режимами**, а не два отдельных skill:
 
-Когда пользователь пишет **«скажи в станции: <текст>»**, **«скажи на станции: <текст>»** или **«скажи в Яндекс Станции: <текст>»**, сразу выполнить:
+- `speak.sh` произносит пользовательский текст голосом Алисы;
+- `command.sh` передаёт текст Алисе как команду для музыки, таймеров и умного дома.
 
-```bash
-"${HERMES_HOME:-$HOME/.hermes}/skills/smart-home/yandex-station-speak/speak.sh" '<текст>'
-```
+Оба режима используют один `SKILL.md`, один `.env` и один Glagol/Quasar-клиент.
+
+## Озвучка текста
+
+Когда пользователь пишет **«скажи в станции: <текст>»**, **«скажи на станции: <текст>»** или **«скажи в Яндекс Станции: <текст>»**:
+
+1. Записать точный пользовательский текст через `write_file` в `/root/.hermes/cache/scratch/station-speech.txt`. Не подставлять пользовательский текст в shell-команду.
+2. Выполнить фиксированную команду, которая читает файл и передаёт текст отдельным аргументом без shell-интерполяции:
+
+   ```bash
+   python3 -c 'import os, pathlib, subprocess; h=os.environ.get("HERMES_HOME", str(pathlib.Path.home()/".hermes")); p=pathlib.Path(h)/"skills/smart-home/yandex-station-speak/speak.sh"; t=pathlib.Path("/root/.hermes/cache/scratch/station-speech.txt").read_text(); raise SystemExit(subprocess.run([str(p), t]).returncode)'
+   ```
+3. Удалить временный файл фиксированной командой после выполнения.
 
 - Обычную фразу озвучивать без уточнения: команда пользователя уже является явным поручением.
 - Передавать только пользовательский текст после триггера; не добавлять пояснения, код, команды или секреты.
@@ -71,7 +82,7 @@ metadata:
 "${HERMES_HOME:-$HOME/.hermes}/skills/smart-home/yandex-station-speak/speak.sh" --nopause 'ТЕКСТ'
 ```
 
-Команды Алисе из агента всегда передавать только через описанный выше режим `--file`. Не подставлять пользовательский текст в shell-команду.
+Команды Алисе из агента всегда передавать только через описанный выше режим `--file`. Прямой позиционный аргумент допустим для ручного вызова человеком, но агент не должен строить из пользовательского текста shell-строку.
 
 Проверка устройств:
 

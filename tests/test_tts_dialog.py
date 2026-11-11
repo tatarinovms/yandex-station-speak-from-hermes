@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import tempfile
 import unittest
@@ -45,12 +46,12 @@ class AudioCycleTests(unittest.TestCase):
     def test_send_alice_command_uses_send_text(self):
         with patch.object(tts, "_ws_cmd", return_value='{"status":"ok"}') as send:
             response = tts.send_alice_command(
-                "192.168.0.101", "token", "Включи свет"
+                "192.0.2.101", "token", "Включи свет"
             )
 
         self.assertEqual(response, '{"status":"ok"}')
         send.assert_called_once_with(
-            "192.168.0.101",
+            "192.0.2.101",
             "token",
             {"command": "sendText", "text": "Включи свет"},
         )
@@ -78,17 +79,36 @@ class AudioCycleTests(unittest.TestCase):
     def test_get_alice_state_propagates_get_state_failure(self):
         with patch.object(tts, "_ws_cmd", side_effect=OSError("getState failed")):
             with self.assertRaisesRegex(OSError, "getState failed"):
-                tts.get_alice_state("192.168.0.101", "token")
+                tts.get_alice_state("192.0.2.101", "token")
 
     def test_get_volume_propagates_get_state_failure(self):
         with patch.object(tts, "_ws_cmd", side_effect=OSError("getState failed")):
             with self.assertRaisesRegex(OSError, "getState failed"):
-                tts.get_volume("192.168.0.101", "token")
+                tts.get_volume("192.0.2.101", "token")
 
     def test_is_playing_propagates_get_state_failure(self):
         with patch.object(tts, "_ws_cmd", side_effect=OSError("getState failed")):
             with self.assertRaisesRegex(OSError, "getState failed"):
-                tts.is_playing("192.168.0.101", "token")
+                tts.is_playing("192.0.2.101", "token")
+
+    def test_is_playing_false_when_player_state_is_null(self):
+        response = json.dumps({
+            "state": {"playerState": None, "playing": False, "volume": 0.6}
+        })
+        with patch.object(tts, "_ws_cmd", return_value=response):
+            self.assertFalse(tts.is_playing("192.0.2.101", "token"))
+
+    def test_is_playing_true_when_has_pause(self):
+        response = json.dumps({
+            "state": {"playerState": {"hasPause": True}, "playing": True}
+        })
+        with patch.object(tts, "_ws_cmd", return_value=response):
+            self.assertTrue(tts.is_playing("192.0.2.101", "token"))
+
+    def test_is_playing_raises_when_state_is_missing(self):
+        with patch.object(tts, "_ws_cmd", return_value="{}"):
+            with self.assertRaises(ValueError):
+                tts.is_playing("192.0.2.101", "token")
 
     def test_aborts_before_changes_when_original_volume_is_unknown(self):
         with (
@@ -99,7 +119,7 @@ class AudioCycleTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(OSError, "getState failed"):
                 tts.run_audio_cycle(
-                    "192.168.0.101", "token", "payload", pause=True, volume=0.8
+                    "192.0.2.101", "token", "payload", pause=True, volume=0.8
                 )
 
         pause_music.assert_not_called()
@@ -116,7 +136,7 @@ class AudioCycleTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(OSError, "getState failed"):
                 tts.run_audio_cycle(
-                    "192.168.0.101", "token", "payload", pause=True, volume=0.8
+                    "192.0.2.101", "token", "payload", pause=True, volume=0.8
                 )
 
         pause_music.assert_not_called()
@@ -136,7 +156,7 @@ class AudioCycleTests(unittest.TestCase):
             patch.object(tts.time, "sleep"),
         ):
             with self.assertRaisesRegex(OSError, "send failed"):
-                tts.run_audio_cycle("192.168.0.101", "token", "payload", pause=True, volume=0.8)
+                tts.run_audio_cycle("192.0.2.101", "token", "payload", pause=True, volume=0.8)
 
         self.assertEqual(
             events,
@@ -153,7 +173,7 @@ class AudioCycleTests(unittest.TestCase):
             patch.object(tts, "wait_until_idle", return_value=True),
             patch.object(tts, "cmd_resume_music") as resume,
         ):
-            tts.run_audio_cycle("192.168.0.101", "token", "payload", pause=True, volume=0.8)
+            tts.run_audio_cycle("192.0.2.101", "token", "payload", pause=True, volume=0.8)
 
         resume.assert_not_called()
 

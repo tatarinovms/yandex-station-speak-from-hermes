@@ -676,7 +676,16 @@ def is_playing(station_ip: str, conversation_token: str) -> bool:
     """
     raw = _ws_cmd(station_ip, conversation_token, {"command": "getState"})
     data = json.loads(raw)
-    return bool(data.get("state", {}).get("playerState", {}).get("hasPause"))
+    state = data.get("state")
+    if not isinstance(state, dict):
+        raise ValueError("getState: state is missing or not an object")
+    player = state.get("playerState")
+    if player is None:
+        # Плеер не активен (колонка в простое) — это валидный ответ, не ошибка.
+        return False
+    if not isinstance(player, dict):
+        raise ValueError("getState: playerState is not an object")
+    return bool(player.get("hasPause"))
 
 
 def cmd_set_volume(station_ip: str, conversation_token: str, volume: float) -> None:
